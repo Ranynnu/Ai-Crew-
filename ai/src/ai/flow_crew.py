@@ -5,10 +5,13 @@
  架构：天气先行 → 并行(预算+景点+美食) → 耦合整合
 ============================================================
 """
-# ==================== 一劳永逸：禁用 rich 边框输出 ====================
-# 必须在所有 import 之前设置，防止 CrewAI/rich 在 Windows GBK 终端输出表格字符
-import os
+# ==================== 一劳永逸：禁用 rich 边框 + 强制 UTF-8 ====================
+# 必须在所有 import 之前设置
+import os, io, sys
 os.environ["CREWAI_DISABLE_RICH"] = "1"
+# 强制 stdout/stderr 为 UTF-8（解决 Windows GBK 终端乱码）
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ==================== 标准库导入 ====================
 import asyncio          # 异步编程，支持 Flow 的 kickoff_async
