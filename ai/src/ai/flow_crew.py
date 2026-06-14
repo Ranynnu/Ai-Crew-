@@ -60,11 +60,13 @@ llm = LLM(
 )
 
 # ==================== Embedder 嵌入模型配置（知识库 RAG 用） ====================
+# 注意：CrewAI 的 OllamaProvider 使用 model_name 字段（不是 model）
+# 且通过 validation_alias 支持 EMBEDDINGS_OLLAMA_MODEL_NAME 等别名
 EMBEDDER_CONFIG = {
     "provider": "ollama",
     "config": {
-        "model": "nomic-embed-text",                     # 轻量嵌入模型
-        "base_url": "http://localhost:11434"
+        "model_name": "nomic-embed-text",           # OllamaProvider 要求的字段名
+        "url": "http://localhost:11434/api/embeddings",
     },
 }
 
