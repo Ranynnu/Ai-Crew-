@@ -119,7 +119,7 @@ create_itinerary:
 
     ===== 输出格式（每天严格按此结构，用 Markdown） =====
 
-    # 【{destination}】{days}天{days+1}晚 超全自由行攻略 🌟
+    # 【{destination}】{days}天{after_days}晚 超全自由行攻略 🌟
 
     ## 📅 行程概览
     - **出行日期**：请根据天气信息推断当前季节
