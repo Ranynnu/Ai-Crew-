@@ -2,6 +2,12 @@
 import argparse
 import sys
 import warnings
+from pathlib import Path
+
+# ———— 确保项目根目录在 sys.path 中 ————
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from ai.flow_crew import run_travel_planning
 
@@ -34,10 +40,15 @@ def run():
         default="",
         help="用户的旅行偏好，如 '喜欢潜水，怕晒'（可选）"
     )
+    parser.add_argument(
+        "--budget", "-b",
+        default="中等",
+        help="旅行预算，如 '经济型3000元'、'中等'、'豪华5000元'（默认：中等）"
+    )
     args = parser.parse_args()
 
     try:
-        run_travel_planning(args.destination, args.days, args.preferences)
+        run_travel_planning(args.destination, args.days, args.preferences, args.budget)
     except Exception as e:
         print(f"运行旅行规划时发生错误: {e}", file=sys.stderr)
         sys.exit(1)
@@ -81,7 +92,8 @@ def run_with_trigger():
         destination = payload.get("destination", "三亚")
         days = payload.get("days", 3)
         preferences = payload.get("preferences", "")
-        run_travel_planning(destination, days, preferences)
+        budget = payload.get("budget", "中等")
+        run_travel_planning(destination, days, preferences, budget)
     except json.JSONDecodeError as e:
         print(f"JSON 解析错误: {e}", file=sys.stderr)
         sys.exit(1)
