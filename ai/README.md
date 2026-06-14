@@ -1,54 +1,103 @@
-# Ai Crew
+# Ai Crew — 多智能体旅行规划
 
-Welcome to the Ai Crew project, powered by [crewAI](https://crewai.com). This template is designed to help you set up a multi-agent AI system with ease, leveraging the powerful and flexible framework provided by crewAI. Our goal is to enable your agents to collaborate effectively on complex tasks, maximizing their collective intelligence and capabilities.
+基于 [crewAI](https://crewai.com) 构建的多智能体旅行规划系统。四位专业化 AI Agent（天气专家、景点策划、美食向导、行程总指挥）分工协作，为用户生成完整的定制旅行行程。
 
-## Installation
+## 技术栈
 
-Ensure you have Python >=3.10 <3.14 installed on your system. This project uses [UV](https://docs.astral.sh/uv/) for dependency management and package handling, offering a seamless setup and execution experience.
+- **框架**：crewAI v1.14+（Flow 并行架构）
+- **LLM**：[Ollama](https://ollama.com) 本地部署 `qwen2.5:7b`
+- **嵌入模型**：`nomic-embed-text`（用于知识库 RAG）
+- **知识库**：支持 docx / pdf / xlsx / pptx / html / md 文档，由 Docling 解析 + 向量搜索
+- **包管理**：[UV](https://docs.astral.sh/uv/)
+- **Python**：>=3.10, <3.14
 
-First, if you haven't already, install uv:
+## 快速开始
 
-```bash
-pip install uv
-```
-
-Next, navigate to your project directory and install the dependencies:
-
-(Optional) Lock the dependencies and install them by using the CLI command:
-```bash
-crewai install
-```
-### Customizing
-
-**Add your `OPENAI_API_KEY` into the `.env` file**
-
-- Modify `src/ai/config/agents.yaml` to define your agents
-- Modify `src/ai/config/tasks.yaml` to define your tasks
-- Modify `src/ai/crew.py` to add your own logic, tools and specific args
-- Modify `src/ai/main.py` to add custom inputs for your agents and tasks
-
-## Running the Project
-
-To kickstart your crew of AI agents and begin task execution, run this from the root folder of your project:
+### 1. 安装 Ollama 并拉取模型
 
 ```bash
-$ crewai run
+ollama pull qwen2.5:7b
+ollama pull nomic-embed-text
 ```
 
-This command initializes the AI Crew, assembling the agents and assigning them tasks as defined in your configuration.
+### 2. 安装依赖
 
-This example, unmodified, will run the create a `report.md` file with the output of a research on LLMs in the root folder.
+```bash
+cd ai
+uv sync
+```
 
-## Understanding Your Crew
+### 3. 运行
 
-The AI Crew is composed of multiple AI agents, each with unique roles, goals, and tools. These agents collaborate on a series of tasks, defined in `config/tasks.yaml`, leveraging their collective skills to achieve complex objectives. The `config/agents.yaml` file outlines the capabilities and configurations of each agent in your crew.
+```bash
+# 使用默认参数（目的地：三亚，天数：3）
+uv run ai
 
-## Support
+# 自定义参数
+uv run ai --destination 杭州 --days 4 --preferences "喜欢爬山，不吃辣"
 
-For support, questions, or feedback regarding the Ai Crew or crewAI.
-- Visit our [documentation](https://docs.crewai.com)
-- Reach out to us through our [GitHub repository](https://github.com/joaomdmoura/crewai)
-- [Join our Discord](https://discord.com/invite/X4JWnZnxPb)
-- [Chat with our docs](https://chatg.pt/DWjSBZn)
+# 查看所有选项
+uv run ai --help
+```
 
-Let's create wonders together with the power and simplicity of crewAI.
+## 项目结构
+
+```
+ai/
+├── src/ai/
+│   ├── main.py              # CLI 入口（argparse）
+│   ├── flow_crew.py         # Flow 编排 + 工厂类 + YAML 混合架构
+│   └── config/
+│       ├── agents.yaml      # Agent 静态配置（role / goal / backstory）
+│       └── tasks.yaml       # Task 静态配置（描述模板 / 期望输出）
+├── tools/
+│   ├── weather_tool.py      # 天气工具（Open-Meteo API，同步+异步）
+│   └── custom_tool.py       # 自定义工具模板
+├── knowledge/               # 知识库文档（放 .docx / .pdf 等）
+│   ├── 三亚旅游指南.docx
+│   └── user_preference.txt
+├── pyproject.toml
+└── README.md
+```
+
+## 架构说明
+
+```
+用户输入（destination, days, preferences）
+    │
+    ▼
+┌──────────────┐
+│  阶段1：天气  │  @start() → WeatherTool 调用 Open-Meteo API
+└──────┬───────┘
+       │
+       ▼
+┌──────────────────────────────────┐
+│  阶段2：并行（均拿到天气结果）     │
+│  ├─ @listen → 景点策划 Crew       │  ← 知识库 RAG 增强
+│  └─ @listen → 美食向导 Crew       │  ← 知识库 RAG 增强
+└──────────────┬───────────────────┘
+               │
+               ▼
+┌──────────────┐
+│  阶段3：整合  │  @listen(and_(...)) → 行程总指挥
+└──────┬───────┘
+       │
+       ▼
+   最终行程单
+```
+
+### 混合架构
+
+- **agents.yaml / tasks.yaml**：管 Agent/Task 的**静态属性**（role, goal, backstory, 描述模板）
+- **TravelCrewFactory**：工厂方法注入**动态参数**（destination, days, preferences, weather_info）
+- 修改 Agent 人设只需编辑 YAML，无需改动 Python 代码
+
+## 添加知识库
+
+在 `knowledge/` 目录下放入任意支持的文档（docx / pdf / xlsx / pptx / html / md），系统会自动扫描加载。无匹配时会自动回退到 Agent 的 LLM 知识生成。
+
+## 自定义配置
+
+- 修改 `config/agents.yaml` — 调整 Agent 角色/目标/背景
+- 修改 `config/tasks.yaml` — 调整任务描述和期望输出
+- 修改 `flow_crew.py` — 更改 LLM 模型、温度、嵌入模型
