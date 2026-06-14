@@ -230,12 +230,13 @@ class TravelCrewFactory:
             preferences=preferences,
             budget_info=budget_info,
         )
-        # 追加天气和结构要求
+        # 追加天气和结构要求（景点需含推荐理由）
         full = (
             f"{base}\n"
             f"[天气信息]：{weather_info}\n"
             f"[预算约束]：{budget_info}\n"
-            f"要求：每个景点标注区域位置+门票价格+活动强度；门票总和不超过预算。"
+            f"要求：每个景点标注区域位置+门票价格+活动强度+推荐理由"
+            f"（一句话说明为什么适合该用户）；门票总和不超过预算。"
         )
         task = Task(description=full, agent=agent,
                     expected_output=self._get_expected_output("attractions"))
