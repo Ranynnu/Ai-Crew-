@@ -1,0 +1,35 @@
+gather_weather:
+  description: >
+    查询 {destination} 的实时天气。
+  expected_output: >
+    一个简明扼要的天气报告，包括温度、天气状况、湿度、风力以及穿衣建议。
+  agent: weather_expert
+  async_execution: true
+
+plan_attractions:
+  description: >
+    根据用户偏好（{preferences}），为 {destination} {days} 天旅行规划具体的景点参观方案。
+    考虑景点之间的距离和开放时间，合理安排每天上午、下午的景点。
+  expected_output: >
+    一份详细景点列表，分天列出，每个景点包含推荐理由、预估耗时和最佳参观时间。
+  agent: attractions_expert
+  async_execution: true
+
+plan_food:
+  description: >
+    根据用户偏好（{preferences}），推荐 {destination} 的特色美食和餐厅。
+    覆盖早餐、午餐、晚餐和小吃，考虑地理位置与景点的搭配。
+  expected_output: >
+    一份详细的每日用餐推荐，分天列出，每个餐厅包含名称、推荐菜、推荐理由和大致位置。
+  agent: food_expert
+  async_execution: true
+
+create_itinerary:
+  description: >
+    基于收集到的天气、景点、美食信息，以及用户偏好（{preferences}），
+    为 {destination} 生成一份完整的 {days} 天旅行行程单。
+    行程单需要将天气、景点、用餐安排有机整合，形成每日的详细计划（上午、下午、晚上）。
+    注意避开用户不喜欢的内容（如怕晒则避免长时间户外活动）。
+  expected_output: >
+    一份结构清晰、分天分时段的行程单，包含景点、美食、天气提醒和实用小贴士。
+  agent: coordinator
