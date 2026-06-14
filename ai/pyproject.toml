@@ -11,11 +11,8 @@ dependencies = [
 
 [project.scripts]
 ai = "ai.main:run"
-run_crew = "ai.main:run"
-train = "ai.main:train"
-replay = "ai.main:replay"
-test = "ai.main:test"
-run_with_trigger = "ai.main:run_with_trigger"
+plan = "ai.main:run"
+plan_with_trigger = "ai.main:run_with_trigger"
 
 [build-system]
 requires = ["hatchling"]
