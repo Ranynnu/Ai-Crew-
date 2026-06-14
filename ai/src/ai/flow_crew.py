@@ -1,4 +1,5 @@
 import asyncio
+import yaml
 from pathlib import Path
 from crewai.flow.flow import Flow, listen, start, router, or_, and_
 from crewai import Crew, Agent, Task, LLM
@@ -9,6 +10,19 @@ from tools.weather_tool import WeatherTool
 CURRENT_DIR = Path(__file__).parent.resolve()          # src/ai
 PROJECT_ROOT = CURRENT_DIR.parent.parent               # D:\crewai\ai
 KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge"
+CONFIG_DIR = CURRENT_DIR / "config"
+
+# ==================== YAML 配置加载 ====================
+def _load_yaml(filename: str) -> dict:
+    path = CONFIG_DIR / filename
+    if not path.exists():
+        print(f"WARNING: YAML config not found: {path}")
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+AGENTS_CFG = _load_yaml("agents.yaml")
+TASKS_CFG = _load_yaml("tasks.yaml")
 
 # ==================== LLM 初始化 ====================
 llm = LLM(
@@ -26,21 +40,54 @@ EMBEDDER_CONFIG = {
 
 # ==================== 工厂类 ====================
 class TravelCrewFactory:
+    """
+    混合架构：
+    - 静态配置（role, goal, backstory, expected_output）从 agents.yaml / tasks.yaml 读取
+    - 动态参数（destination, days, preferences, weather）由工厂方法注入
+    """
+
+    # Agent key 映射：工厂方法 → YAML 中的 agent名
+    AGENT_MAP = {
+        "weather":   "weather_expert",
+        "attractions": "attractions_expert",
+        "food":      "food_expert",
+        "itinerary": "coordinator",
+    }
+
+    # Task key 映射：工厂方法 → YAML 中的 task名
+    TASK_MAP = {
+        "weather":   "gather_weather",
+        "attractions": "plan_attractions",
+        "food":      "plan_food",
+        "itinerary": "create_itinerary",
+    }
+
     def __init__(self, llm):
         self.llm = llm
         self.weather_tool = WeatherTool()
         self._knowledge_sources = None  # 延迟加载
 
-    # ---------- 知识库：加载 knowledge/ 下所有文档 ----------
+    # ========== 从 YAML 取 Agent/Task 静态配置 ==========
+
+    def _get_agent_config(self, key: str) -> dict:
+        """读取 YAML 中的 Agent 静态配置"""
+        name = self.AGENT_MAP.get(key, key)
+        return AGENTS_CFG.get(name, {})
+
+    def _get_task_config(self, key: str) -> dict:
+        """读取 YAML 中的 Task 静态配置模板"""
+        name = self.TASK_MAP.get(key, key)
+        return TASKS_CFG.get(name, {})
+
+    # ========== 知识库 ==========
+
     def _get_knowledge_sources(self):
-        """加载 knowledge/ 目录下所有支持的文档（docx、pdf、xlsx、pptx、html、md）。
-        过滤掉纯用户偏好文本文件（user_preference.txt）。
+        """加载 knowledge/ 目录下所有支持的文档。
         如果没有知识库文件，返回 None，Agent 依靠 LLM 自身知识生成。
         """
         if self._knowledge_sources is not None:
-            return self._knowledge_sources  # 已加载过，直接返回
+            return self._knowledge_sources  # 已缓存
 
-        # 支持的文档后缀（Docling 支持的格式）
         supported_exts = {'.docx', '.pdf', '.xlsx', '.pptx', '.html', '.md', '.asciidoc'}
         knowledge_files = []
 
@@ -48,74 +95,87 @@ class TravelCrewFactory:
             for f in KNOWLEDGE_DIR.iterdir():
                 if f.is_file() and f.suffix.lower() in supported_exts:
                     knowledge_files.append(f)
-                    print(f"📄 发现知识库文件: {f.name}")
+                    print(f"[knowledge] found: {f.name}")
 
         if knowledge_files:
             try:
                 self._knowledge_sources = [
                     CrewDoclingSource(file_paths=[str(p) for p in knowledge_files])
                 ]
-                print(f"✅ 成功加载 {len(knowledge_files)} 个知识库文件")
+                print(f"[knowledge] loaded {len(knowledge_files)} file(s)")
             except Exception as e:
-                print(f"❌ 知识库加载失败: {e}")
+                print(f"[knowledge] load failed: {e}")
                 self._knowledge_sources = None
         else:
-            print(f"⚠️ knowledge/ 目录下未找到知识库文档，Agent 将完全依靠自身知识")
+            print("[knowledge] no documents found, agents will rely on LLM knowledge")
             self._knowledge_sources = None
 
         return self._knowledge_sources
 
-    # ---------- 创建 Agent ----------
-    def _create_agent(self, role, goal, backstory, tools=None):
+    # ========== 创建 Agent（YAML 静态属性 + 代码注入 LLM/tools） ==========
+
+    def _create_agent_from_yaml(self, key: str, tools=None):
+        """从 YAML 加载 Agent 的 role/goal/backstory，代码注入 LLM 和工具"""
+        cfg = self._get_agent_config(key)
         return Agent(
-            role=role,
-            goal=goal,
-            backstory=backstory,
+            role=cfg.get("role", ""),
+            goal=cfg.get("goal", ""),
+            backstory=cfg.get("backstory", ""),
             llm=self.llm,
             tools=tools or [],
-            allow_delegation=False,
-            verbose=True,
-            memory=False
+            allow_delegation=cfg.get("allow_delegation", False),
+            verbose=cfg.get("verbose", True),
+            memory=False,
         )
 
-    # ---------- 天气 Crew ----------
+    # ========== 填充 Task 描述中的占位符 ==========
+
+    def _fill_task_description(self, key: str, **kwargs) -> str:
+        """从 YAML 读取 Task 描述模板，用动态参数填充占位符"""
+        cfg = self._get_task_config(key)
+        template = cfg.get("description", "")
+        # 支持 {destination}, {days}, {preferences}, {weather_info} 等插值
+        try:
+            return template.format(**kwargs)
+        except KeyError as e:
+            print(f"[warn] missing placeholder {e} in task '{key}'")
+            return template
+
+    def _get_task_expected_output(self, key: str) -> str:
+        cfg = self._get_task_config(key)
+        return cfg.get("expected_output", "")
+
+    # ========== 各 Crew 工厂方法 ==========
+
     def create_weather_crew(self, destination: str):
-        """仅负责天气查询的 Crew"""
-        agent = self._create_agent(
-            role="旅行天气专家",
-            goal="提供目的地的实时天气信息",
-            backstory="你擅长使用天气工具查询准确数据。",
-            tools=[self.weather_tool]
-        )
+        agent = self._create_agent_from_yaml("weather", tools=[self.weather_tool])
+        description = self._fill_task_description("weather", destination=destination)
         task = Task(
-            description=f"查询{destination}的当前天气、温度、风速，并给出穿衣建议。",
+            description=description,
             agent=agent,
-            expected_output="简明天气报告"
+            expected_output=self._get_task_expected_output("weather"),
         )
-        return Crew(
-            agents=[agent],
-            tasks=[task],
-            verbose=True
-        )
+        return Crew(agents=[agent], tasks=[task], verbose=True)
 
-    # ---------- 景点 Crew ----------
     def create_attractions_crew(self, destination: str, days: int,
                                  preferences: str, weather_info: str):
-        agent = self._create_agent(
-            role="景点策划专家",
-            goal="推荐最适合用户的景点",
-            backstory="你是本地通，能根据偏好推荐景点并安排合理路线。"
+        agent = self._create_agent_from_yaml("attractions")
+        description = self._fill_task_description(
+            "attractions",
+            destination=destination,
+            days=days,
+            preferences=preferences,
+        )
+        # 把天气信息追加到描述末尾
+        full_description = (
+            f"{description}\n"
+            f"[来自天气专家的信息]：{weather_info}\n"
+            f"请结合天气状况调整推荐（如雨天优先室内景点）。"
         )
         task = Task(
-            description=(
-                f"为{destination}规划{days}天的景点行程。\n"
-                f"用户偏好：{preferences}\n"
-                f"当地天气：{weather_info}\n"
-                f"请结合天气状况，推荐适合的景点并输出分天景点列表（含推荐理由）。"
-                f"如有雨天，优先推荐室内景点或博物馆。"
-            ),
+            description=full_description,
             agent=agent,
-            expected_output="景点行程规划"
+            expected_output=self._get_task_expected_output("attractions"),
         )
         knowledge_sources = self._get_knowledge_sources()
         return Crew(
@@ -123,25 +183,25 @@ class TravelCrewFactory:
             tasks=[task],
             knowledge_sources=knowledge_sources if knowledge_sources else None,
             embedder=EMBEDDER_CONFIG if knowledge_sources else None,
-            verbose=True
+            verbose=True,
         )
 
-    # ---------- 美食 Crew ----------
     def create_food_crew(self, destination: str, preferences: str, weather_info: str):
-        agent = self._create_agent(
-            role="地道美食向导",
-            goal="推荐符合口味的当地美食",
-            backstory="你是美食家，推荐地道餐厅并说明理由。"
+        agent = self._create_agent_from_yaml("food")
+        description = self._fill_task_description(
+            "food",
+            destination=destination,
+            preferences=preferences,
+        )
+        full_description = (
+            f"{description}\n"
+            f"[来自天气专家的信息]：{weather_info}\n"
+            f"请结合天气推荐合适的餐食（如天冷推荐热汤锅、天热推荐清爽食物）。"
         )
         task = Task(
-            description=(
-                f"为{destination}推荐特色美食和餐厅。\n"
-                f"用户偏好：{preferences}\n"
-                f"当地天气：{weather_info}\n"
-                f"请结合天气推荐合适的餐食（如天冷推荐热汤锅、天热推荐清爽食物）。"
-            ),
+            description=full_description,
             agent=agent,
-            expected_output="美食推荐列表"
+            expected_output=self._get_task_expected_output("food"),
         )
         knowledge_sources = self._get_knowledge_sources()
         return Crew(
@@ -149,39 +209,32 @@ class TravelCrewFactory:
             tasks=[task],
             knowledge_sources=knowledge_sources if knowledge_sources else None,
             embedder=EMBEDDER_CONFIG if knowledge_sources else None,
-            verbose=True
+            verbose=True,
         )
 
-    # ---------- 整合 Crew ----------
     def create_itinerary_crew(self, destination: str, days: int, preferences: str,
                                weather_info: str, attractions_info: str, food_info: str):
-        """整合所有信息生成最终行程"""
-        agent = self._create_agent(
-            role="资深旅行规划总指挥",
-            goal="整合专家成果，输出完美行程",
-            backstory="你是总规划师，善于将天气、景点、美食整合成每日计划。"
+        agent = self._create_agent_from_yaml("itinerary")
+        description = self._fill_task_description(
+            "itinerary",
+            destination=destination,
+            days=days,
+            preferences=preferences,
+        )
+        # 整合时把上游结果直接拼进 description
+        full_description = (
+            f"{description}\n\n"
+            f"===== 天气汇总 =====\n{weather_info}\n\n"
+            f"===== 景点规划 =====\n{attractions_info}\n\n"
+            f"===== 美食推荐 =====\n{food_info}\n\n"
+            f"请以上述信息为基础，生成完整 {days} 天行程单（上午/下午/晚上）。"
         )
         task = Task(
-            description=f"""
-            目的地：{destination}
-            天数：{days}
-            用户偏好：{preferences}
-
-            天气信息：{weather_info}
-            景点规划：{attractions_info}
-            美食推荐：{food_info}
-
-            请整合以上信息，生成一份详细的{days}天行程单（上午、下午、晚上），
-            注意避开用户不喜欢的内容（如怕晒则避免长时间户外）。
-            """,
+            description=full_description,
             agent=agent,
-            expected_output="完整的行程单"
+            expected_output=self._get_task_expected_output("itinerary"),
         )
-        return Crew(
-            agents=[agent],
-            tasks=[task],
-            verbose=True
-        )
+        return Crew(agents=[agent], tasks=[task], verbose=True)
 
 
 # ==================== Flow 定义 ====================
@@ -196,7 +249,6 @@ class TravelFlow(Flow):
     # ---- 阶段 1：先获取天气 ----
     @start()
     async def collect_weather(self):
-        """第一步：获取目的地实时天气"""
         crew_weather = self.factory.create_weather_crew(self.destination)
         result = await crew_weather.kickoff_async()
         return str(result)
@@ -204,7 +256,6 @@ class TravelFlow(Flow):
     # ---- 阶段 2：拿到天气后，并行收集景点和美食 ----
     @listen("collect_weather")
     async def collect_attractions(self):
-        """第二步（并行A）：根据天气推荐景点"""
         weather = self.state.get("collect_weather", "")
         crew_attractions = self.factory.create_attractions_crew(
             self.destination, self.days, self.preferences, weather
@@ -214,7 +265,6 @@ class TravelFlow(Flow):
 
     @listen("collect_weather")
     async def collect_food(self):
-        """第二步（并行B）：根据天气推荐美食"""
         weather = self.state.get("collect_weather", "")
         crew_food = self.factory.create_food_crew(
             self.destination, self.preferences, weather
@@ -225,7 +275,6 @@ class TravelFlow(Flow):
     # ---- 阶段 3：景点和美食都完成后，整合行程 ----
     @listen(and_("collect_attractions", "collect_food"))
     async def combine(self, combined):
-        """第三步：整合天气、景点、美食，生成最终行程"""
         weather = self.state.get("collect_weather", "")
         attractions = self.state.get("collect_attractions", "")
         food = self.state.get("collect_food", "")
@@ -243,7 +292,7 @@ def run_travel_planning(destination: str, days: int = 3, preferences: str = ""):
     flow = TravelFlow(destination, days, preferences)
     result = asyncio.run(flow.kickoff_async())
     print("\n" + "=" * 50)
-    print("📋 最终行程计划")
+    print("  Final Itinerary")
     print("=" * 50)
     print(result)
     return result
